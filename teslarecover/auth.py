@@ -20,7 +20,9 @@ import urllib.request
 
 DASHCAM_URL = 'https://dashcam.tesla.com'
 JWT_RE = re.compile(r'^eyJ[\w-]+\.[\w-]+\.[\w-]+$')
-PROFILE_DIR = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'TeslaRecover', 'browser-profile')
+from .platforms import data_dir
+
+PROFILE_DIR = os.path.join(data_dir(), 'browser-profile')
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 
@@ -31,6 +33,12 @@ class SignInClosed(RuntimeError):
 def find_browser():
     """An installed Edge or Chrome (Edge ships with Windows 11)."""
     candidates = []
+    if sys.platform == 'darwin':
+        for base in ('/Applications', os.path.expanduser('~/Applications')):
+            candidates.extend(os.path.join(base, app, 'Contents', 'MacOS', exe)
+                              for app, exe in (('Google Chrome.app', 'Google Chrome'),
+                                               ('Microsoft Edge.app', 'Microsoft Edge'),
+                                               ('Chromium.app', 'Chromium')))
     for base in (os.environ.get('ProgramFiles(x86)'), os.environ.get('ProgramFiles'), os.environ.get('LOCALAPPDATA')):
         if base:
             candidates += [os.path.join(base, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),

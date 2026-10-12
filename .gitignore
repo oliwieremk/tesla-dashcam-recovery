@@ -22,3 +22,7 @@ encrypted/
 
 # Local tool settings
 .claude/
+
+# Local macOS bootstrap
+.tools/
+*.img

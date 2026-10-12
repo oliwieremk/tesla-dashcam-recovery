@@ -3,6 +3,7 @@ directory entries, including deleted ones. Based on run.py."""
 
 import os
 import struct
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -11,18 +12,25 @@ END_OF_CHAIN = 0x0FFFFFF7
 
 
 class AlignedReader:
-    """Raw Windows volumes only allow sector-aligned seeks/reads, so round each read out to whole sectors."""
+    """Sector-aligned read-only access; POSIX pread keeps concurrent reads independent."""
 
     def __init__(self, path, align=4096):
-        self.f = open(path, 'rb', buffering=0)
+        fd = None
+        if sys.platform == 'darwin':
+            from .macos_access import duplicate_handle
+            fd = duplicate_handle(path)
+        self.f = os.fdopen(fd, 'rb', buffering=0) if fd is not None else open(path, 'rb', buffering=0)
         self.align = align
 
     def read_at(self, pos, n):
         start = pos - pos % self.align
         end = pos + n
         end += -end % self.align
-        self.f.seek(start)
-        data = self.f.read(end - start)
+        if os.name == 'posix':
+            data = os.pread(self.f.fileno(), end - start, start)
+        else:
+            self.f.seek(start)
+            data = self.f.read(end - start)
         return data[pos - start:pos - start + n]
 
     def close(self):
@@ -54,7 +62,15 @@ class Volume:
         self.path = path
         self._local = threading.local()
         self._pool = None
-        self.reader = AlignedReader(path) if path.startswith('\\\\.\\') else AlignedReader(path, 1)
+        self._readers = []
+        self.reader = AlignedReader(path, 4096 if path.startswith(('\\\\.\\', '/dev/rdisk')) else 1)
+        try:
+            self._load()
+        except Exception:
+            self.reader.close()
+            raise
+
+    def _load(self):
         boot = self.reader.read_at(0, 512)
         self.is_exfat = boot[3:8] == b'EXFAT'
         if self.is_exfat:
@@ -82,6 +98,8 @@ class Volume:
     def close(self):
         if self._pool:
             self._pool.shutdown()
+        for reader in self._readers:
+            reader.close()
         self.reader.close()
 
     def read_heads(self, clusters, n=0x18):
@@ -93,6 +111,7 @@ class Volume:
             reader = getattr(self._local, 'reader', None)
             if reader is None:
                 reader = self._local.reader = AlignedReader(self.path, self.reader.align)
+                self._readers.append(reader)
             return reader.read_at(self.cluster_offset(cluster), n)
         return list(self._pool.map(read_one, clusters))
 

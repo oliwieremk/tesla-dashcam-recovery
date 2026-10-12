@@ -32,6 +32,8 @@ def free_port():
 
 def relaunch_as_admin():
     """Raw access to a drive is sometimes refused without admin rights; restart elevated."""
+    if os.name != 'nt':
+        return False
     args = subprocess.list2cmdline(['-m', 'teslarecover'] + sys.argv[1:])
     cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return ctypes.windll.shell32.ShellExecuteW(None, 'runas', sys.executable, args, cwd, 1) > 32
@@ -45,14 +47,26 @@ def elevate():
     return {'ok': False}
 
 
+def stop_jobs():
+    if server.state.job and server.state.job.thread.is_alive():
+        server.state.job.cancel_requested = True
+        server.state.job.thread.join()
+
+
 def main():
     parser = argparse.ArgumentParser(description='Tesla dashcam recovery')
+    parser.add_argument('--image', help='scan an uncompressed FAT32/exFAT partition image')
     parser.add_argument('--library', help='open this folder of recovered clips in the viewer')
     parser.add_argument('--browser', action='store_true', help='use the default web browser instead of a window')
     parser.add_argument('--serve-only', action='store_true', help='only run the server (for development)')
     parser.add_argument('--port', type=int, default=0)
     args = parser.parse_args()
 
+    if args.image:
+        state_image = os.path.abspath(os.path.expanduser(args.image))
+        if not os.path.isfile(state_image):
+            parser.error('Partition image does not exist')
+        server.state.image = state_image
     if args.library:
         server.open_library(args.library)
     port = args.port or free_port()
@@ -72,13 +86,31 @@ def main():
             thread.join()
         except KeyboardInterrupt:
             pass
+        finally:
+            stop_jobs()
+            if sys.platform == 'darwin':
+                from .macos_access import release
+                release()
+            srv.should_exit = True
+            thread.join(timeout=5)
         return
 
-    import webview
-    server.state.window = webview.create_window('Tesla Dashcam Recovery', url, width=1440, height=920,
-                                                min_size=(900, 600))
-    webview.start()
-    srv.should_exit = True
+    try:
+        import webview
+        from .localize import translate, native_strings
+        from .native import update_menu
+        server.state.window = webview.create_window(translate('Tesla Recovery — odzyskiwanie nagrań', server.language()), url, localization=native_strings(server.language()), width=1440, height=920,
+                                                    min_size=(900, 600))
+        server.state.window.events.shown += lambda: update_menu(server.state.window)
+        icon = os.path.join(ROOT, 'macos', 'TeslaRecovery.icns')
+        webview.start(icon=icon if os.path.isfile(icon) else None)
+    finally:
+        stop_jobs()
+        if sys.platform == 'darwin':
+            from .macos_access import release
+            release()
+        srv.should_exit = True
+        thread.join(timeout=5)
 
 
 if __name__ == '__main__':

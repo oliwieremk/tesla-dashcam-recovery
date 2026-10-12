@@ -47,9 +47,9 @@ def export(drive, scan, clips, out_dir, progress, cancelled=lambda: False):
             name = encrypted_name(clip)
             dest = os.path.join(enc_dir, name)
             progress('Copying %s' % (clip['name'] or 'deleted clip %s' % clip['id']), done, total)
-            if clip['source'] == 'live':
+            if clip['source'] == 'live' and os.name == 'nt' and len(drive.rstrip('\\/')) == 2:
                 # Through the file system, so fragmented files come out intact.
-                src = drive.rstrip('\\/') + clip['path'].replace('/', '\\')
+                src = drive.rstrip('\\/') + clip['path'].replace('/', os.sep)
                 shutil.copyfile(src, dest + '.part')
             else:
                 if vol is None:
